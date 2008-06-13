@@ -8,18 +8,26 @@ trait Exp{
       this
 }
 
+trait Trans extends (Exp=>Exp){
+  def pre(e:Exp):Boolean
+}
+
 trait Op{
   override def toString = getClass.getSimpleName
+  def calc(a:Int,b:Int):Int
 }
 
 object * extends Op{
   override def toString="*"
+  def calc(a:Int,b:Int) = a*b
 }
 object Add extends Op{
   override def toString="+"
+  def calc(a:Int,b:Int) = a+b
 }
 object / extends Op{
   override def toString="/"
+  def calc(a:Int,b:Int) = a/b
 }
 
 case class Symbol(name:String) extends Exp{
@@ -28,12 +36,13 @@ case class Symbol(name:String) extends Exp{
 case class Integer(i:Int) extends Exp{
   override def toString=i.toString
 }
+object Helper{
+  implicit def int2Int(i:Int):Integer = Integer(i)
+}
+import Helper.int2Int
+
 case class Apply(left:Exp,operator:Op,right:Exp) extends Exp{
   override def toString="(" + left.toString +" "+ operator.toString + " " + right.toString + ")"
-}
-
-trait Trans extends (Exp=>Exp){
-  def pre(e:Exp):Boolean
 }
 
 class Commutative(op:Op) extends Trans{
@@ -69,6 +78,42 @@ object Collect extends Trans{
     case Apply(CoeffExp(i,e1),Add,CoeffExp(i2,e2)) if e1 == e2 => Apply(Integer(i+i2),*,e1) 
   }
 }
+
+object Distribute extends Trans{
+  def pre(e:Exp) = e match {
+  case Apply(_,*,Apply(_,Add,_)) => true
+  case _ => false
+  }
+  def apply(e:Exp) = e match {
+  case Apply(x,*,Apply(s1,Add,s2)) => Apply(Apply(x,*,s1),Add,Apply(x,*,s2))
+  }
+}
+
+object Calc extends Trans{
+  def pre(e:Exp) = e match {
+  case Apply(Integer(i1),op,Integer(i2)) if Array(Add,*).contains(op)=> true
+  case _ => false
+  }
+  def apply(e:Exp) = e match{
+  case Apply(Integer(i1),op,Integer(i2)) if Array(Add,*).contains(op)=> Integer(op.calc(i1,i2))
+  }
+}
+
+object AntiDistribute extends Trans {
+  def pre(e:Exp) = e match {
+  case Apply(Apply(s1,*,x1),Add,Apply(s2,*,x2)) if s1==s2 => true
+  case _ => false
+  }
+  def apply(e:Exp) = e match {
+  case Apply(Apply(s1,*,x1),Add,Apply(s2,*,x2)) if s1==s2 => Apply(s1,*,Apply(x1,Add,x2))
+  }
+}
+
+object Introduce1 extends Trans {
+  def pre(e:Exp) = true
+  def apply(e:Exp) = Apply(1,*,e)
+}
+
 
 case class ExpZipper(exp:Exp){
   def left = exp match {case Apply(left,_,_)=>LeftZipper(this,left)}
@@ -221,10 +266,12 @@ object Test{
     System.out.println(Collect.pre(xy))
     System.out.println(xy.tryTrans(Collect))
     
+    val term4 = Apply(4,*,Apply(2,Add,Apply(4,*,3)))
+    
     val panel = showFrame
     val canvas = new JComponent{
       import java.awt.{Color,Graphics,Graphics2D,Font}
-      val root = term3
+      var root:Exp = term3
       var over:Option[ExpZipper] = None
       val selected = scala.collection.mutable.Set[ExpZipper]()
       val font2 = new Font("Helvetica",Font.PLAIN,30)
@@ -243,7 +290,33 @@ object Test{
           if (selected.contains(sel)) selected-=sel else selected+=sel)
         repaint()
       }                
-      })	
+      })
+      
+      panel.addKeyListener(new java.awt.event.KeyAdapter(){
+        def tryTrans(ts:Trans*) = {
+          root = selected.elements.buffered.head.replace(
+            ts.foldLeft(selected.elements.buffered.head.exp)
+                     {(exp,t) => exp.tryTrans(t)})
+          selected.clear
+          repaint()
+        }  
+      override def keyPressed(e:java.awt.event.KeyEvent){
+        import java.awt.event.KeyEvent._
+        System.out.println(e.getKeyCode)
+        if (e.getKeyCode == VK_K && selected.size == 1)
+           tryTrans(AddCom,MultCom)
+        else if (e.getKeyCode == VK_C && selected.size == 1)
+           tryTrans(Collect)
+        else if (e.getKeyCode == VK_D && selected.size == 1)
+           tryTrans(Distribute)
+        else if (e.getKeyCode == VK_A && selected.size == 1)
+           tryTrans(Calc)
+        else if (e.getKeyCode == VK_Q && selected.size == 1)
+           tryTrans(AntiDistribute)
+        else if (e.getKeyCode == VK_1 && selected.size == 1)
+           tryTrans(Introduce1)
+      }
+      })
       
       override def paint(g:Graphics) {
         val g2d = g.asInstanceOf[Graphics2D]
