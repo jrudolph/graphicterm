@@ -6,6 +6,11 @@ trait Exp{
       t(this)
     else 
       this
+  
+  def *(exp:Exp) = Apply(this,Ops.*,exp)
+  def +(exp:Exp) = Apply(this,Ops.Add,exp)
+  def -(exp:Exp) = Apply(this,Ops.-,exp)
+  def /(exp:Exp) = Apply(this,Ops./,exp)
 }
 
 trait Trans extends (Exp=>Exp){
@@ -16,20 +21,25 @@ trait Op{
   override def toString = getClass.getSimpleName
   def calc(a:Int,b:Int):Int
 }
-
-object * extends Op{
-  override def toString="*"
-  def calc(a:Int,b:Int) = a*b
+object Ops{
+	object * extends Op{
+	  override def toString="*"
+	  def calc(a:Int,b:Int) = a*b
+	}
+	object Add extends Op{
+	  override def toString="+"
+	  def calc(a:Int,b:Int) = a+b
+	}
+    object - extends Op{
+	  override def toString="-"
+	  def calc(a:Int,b:Int) = a-b
+	}
+	object / extends Op{
+	  override def toString="/"
+	  def calc(a:Int,b:Int) = a/b
+	}
 }
-object Add extends Op{
-  override def toString="+"
-  def calc(a:Int,b:Int) = a+b
-}
-object / extends Op{
-  override def toString="/"
-  def calc(a:Int,b:Int) = a/b
-}
-
+import Ops._
 case class Symbol(name:String) extends Exp{
   override def toString=name
 }
@@ -38,8 +48,9 @@ case class Integer(i:Int) extends Exp{
 }
 object Helper{
   implicit def int2Int(i:Int):Integer = Integer(i)
+  implicit def str2symbol(s:String):Symbol = Symbol(s)
 }
-import Helper.int2Int
+import Helper._
 
 case class Apply(left:Exp,operator:Op,right:Exp) extends Exp{
   override def toString="(" + left.toString +" "+ operator.toString + " " + right.toString + ")"
@@ -51,13 +62,20 @@ class Commutative(op:Op) extends Trans{
 }
 
 class Associative(op:Op) extends Trans{
-  def pre(e:Exp) = e match {case Apply(Apply(_,o,_),o2,_) if o==op && o2==op =>true;case _=>false}
-  def apply(e:Exp) = e match {case Apply(Apply(a,o,b),o2,c) if o==op && o2==op => Apply(a,op,Apply(b,op,c))} 
+  def pre(e:Exp) = e match {
+  case Apply(Apply(_,o,_),o2,_) if o==op && o2==op =>true;
+  case Apply(_,o2,Apply(_,o,_)) if o==op && o2==op =>true;
+  case _=>false}
+  def apply(e:Exp) = e match {
+  case Apply(Apply(a,o,b),o2,c) if o==op && o2==op => Apply(a,op,Apply(b,op,c))
+  case Apply(a,o2,Apply(b,o,c)) if o==op && o2==op => Apply(Apply(a,o,b),o2,c)
+  } 
 }
 
 object MultCom extends Commutative(*);
 object AddCom extends Commutative(Add);
 object AddAss extends Associative(Add);
+object MultAss extends Associative(*);
 
 object CoeffExp{
   def unapply(exp:Exp):Option[(Int,Exp)] = exp match {
@@ -82,10 +100,12 @@ object Collect extends Trans{
 object Distribute extends Trans{
   def pre(e:Exp) = e match {
   case Apply(_,*,Apply(_,Add,_)) => true
+  case Apply(_,*,Apply(_,-,_)) => true
   case _ => false
   }
   def apply(e:Exp) = e match {
   case Apply(x,*,Apply(s1,Add,s2)) => Apply(Apply(x,*,s1),Add,Apply(x,*,s2))
+  case Apply(x,*,Apply(s1,-,s2)) => Apply(Apply(x,*,s1),Ops.-,Apply(x,*,s2))
   }
 }
 
@@ -258,8 +278,8 @@ object Test{
     System.out.println(Collect.pre(term2).toString)
     System.out.println(term2.tryTrans(Collect).toString)
     
-    val xy = Apply(x,Add,y)
-    val term3 = Apply(Apply(Integer(2),*,xy),Add,xy)
+    val xy = x + y
+    val term3 = Integer(2) * xy + xy
     System.out.println(Collect.pre(term3))
     System.out.println(term3.tryTrans(Collect))
     
@@ -268,10 +288,15 @@ object Test{
     
     val term4 = Apply(4,*,Apply(2,Add,Apply(4,*,3)))
     
+    val e = Symbol("e")
+    val w = Symbol("ω")
+    val b = Symbol("β")
+    val term5:Exp = Symbol("a") / (w * w) * e * (Integer(-1) * b *(Symbol("t") - "t0")) 
+    
     val panel = showFrame
     val canvas = new JComponent{
       import java.awt.{Color,Graphics,Graphics2D,Font}
-      var root:Exp = term3
+      var root:Exp = term5
       var over:Option[ExpZipper] = None
       val selected = scala.collection.mutable.Set[ExpZipper]()
       val font2 = new Font("Helvetica",Font.PLAIN,30)
@@ -304,17 +329,19 @@ object Test{
         import java.awt.event.KeyEvent._
         System.out.println(e.getKeyCode)
         if (e.getKeyCode == VK_K && selected.size == 1)
-           tryTrans(AddCom,MultCom)
+          tryTrans(AddCom,MultCom)
         else if (e.getKeyCode == VK_C && selected.size == 1)
-           tryTrans(Collect)
+          tryTrans(Collect)
         else if (e.getKeyCode == VK_D && selected.size == 1)
-           tryTrans(Distribute)
+          tryTrans(Distribute)
         else if (e.getKeyCode == VK_A && selected.size == 1)
-           tryTrans(Calc)
+          tryTrans(MultAss,AddAss)
         else if (e.getKeyCode == VK_Q && selected.size == 1)
-           tryTrans(AntiDistribute)
+          tryTrans(AntiDistribute)
         else if (e.getKeyCode == VK_1 && selected.size == 1)
-           tryTrans(Introduce1)
+          tryTrans(Introduce1)
+        else if (e.getKeyCode == VK_EQUALS && selected.size == 1)
+          tryTrans(Calc)
       }
       })
       
