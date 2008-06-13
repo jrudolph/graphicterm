@@ -70,6 +70,9 @@ object Collect extends Trans{
   }
 }
 
+case class ExpZipper(parent:Option[ExpZipper],exp:Exp){}
+
+
 import java.awt.font.FontRenderContext
 import java.awt.Font
 class Layouter(f:Font,ctx:FontRenderContext){
@@ -110,7 +113,7 @@ class Layouter(f:Font,ctx:FontRenderContext){
     g2d.drawString(s,x.toFloat,(y+lo.getAscent/2).toFloat)
   }
   
-  def getAt(root:Exp,x:Double,y:Double):Option[Exp] = {
+  def getAt(parent:Option[ExpZipper],root:Exp,x:Double,y:Double):Option[ExpZipper] = {
     val h = height(root)
     if (x<0||x>width(root)||y< -h/2||y>h/2)
       None
@@ -120,45 +123,49 @@ class Layouter(f:Font,ctx:FontRenderContext){
         val ol = offsetLeft(a)
         val or = offsetRight(a)
         
-        getAt(e1,x-ol._1,y-ol._2).orElse(getAt(e2,x-or._1,y-or._2)).orElse(Some(root))
+        getAt(Some(ExpZipper(parent,root)),e1,x-ol._1,y-ol._2).orElse(getAt(Some(ExpZipper(parent,root)),e2,x-or._1,y-or._2)).orElse(Some(ExpZipper(parent,root)))
       }
-      case _ => Some(root)
+      case _ => Some(ExpZipper(parent,root))
       }
   }
   
-  def draw(g2d:Graphics2D,e:Exp,x:Double,y:Double)(implicit selected:Option[Exp]){
-    val h=height(e)
-    val w=width(e)
-    selected.foreach(sel => {
-      if (sel==e){
-        val oldColor = g2d.getColor
-        g2d.setColor(new java.awt.Color(177,177,255))
-        g2d.fillRect(x.toInt,(y-h/2).toInt,w.toInt,h.toInt)
-        g2d.setColor(oldColor)
-      }}
-    )
-    e match{
+  def draw(g2d:Graphics2D,cur:ExpZipper,x:Double,y:Double)(implicit over:Option[ExpZipper],selected:scala.collection.mutable.Set[ExpZipper]){
+    val h=height(cur.exp)
+    val w=width(cur.exp)
+    
+    val oldColor = g2d.getColor
+    over.foreach(sel => if (sel == cur) {
+      g2d.setColor(new java.awt.Color(177,177,255,150))
+      g2d.fillRect(x.toInt,(y-h/2).toInt,w.toInt,h.toInt)
+    })
+    if (selected.contains(cur)){
+      g2d.setColor(new java.awt.Color(0,149,1,100))
+      g2d.fillRect(x.toInt,(y-h/2).toInt,w.toInt,h.toInt)
+    }
+    g2d.setColor(oldColor)
+    def next(e:Exp) = ExpZipper(Some(cur),e)
+    cur.exp match{
   case a@Apply(e1,/,e2) => {
     val ol = offsetLeft(a)
     val or = offsetRight(a)
 
-    draw(g2d,e1,x+ol._1,y+ol._2)
-    draw(g2d,e2,x+or._1,y+or._2)
+    draw(g2d,next(e1),x+ol._1,y+ol._2)
+    draw(g2d,next(e2),x+or._1,y+or._2)
     
-    g2d.drawLine(x.toInt,y.toInt,(x+width(e)).toInt,y.toInt)
+    g2d.drawLine(x.toInt,y.toInt,(x+width(cur.exp)).toInt,y.toInt)
   }
   case a:Apply => {
     val ol = offsetLeft(a)
     val or = offsetRight(a)
     drawString(g2d,"(",x,y)
-    draw(g2d,a.left,x+ol._1,y+ol._2)
+    draw(g2d,next(a.left),x+ol._1,y+ol._2)
     drawString(g2d,a.operator.toString,x+ol._1+width(a.left)+space,y)
-    draw(g2d,a.right,x+or._1,y+or._2)
+    draw(g2d,next(a.right),x+or._1,y+or._2)
     drawString(g2d,")",x+or._1+space+width(a.right),y)
   }
   case _ => {
-    val h = height(e)
-    drawString(g2d,e.toString,x,y)
+    val h = height(cur.exp)
+    drawString(g2d,cur.exp.toString,x,y)
   }}}
 }
 
@@ -200,23 +207,32 @@ object Test{
     val panel = showFrame
     val canvas = new JComponent{
       import java.awt.{Color,Graphics,Graphics2D,Font}
-      val root = term2
-      var selected:Option[Exp] = None
+      val root = term3
+      var over:Option[ExpZipper] = None
+      val selected = scala.collection.mutable.Set[ExpZipper]()
       val font2 = new Font("Helvetica",Font.PLAIN,30)
       val lo = new Layouter(font2,new FontRenderContext(font2.getTransform,true,true))
       val yOffset = 200;
       
       addMouseMotionListener(new java.awt.event.MouseMotionAdapter(){
       override def mouseMoved(e:java.awt.event.MouseEvent){
-        selected = lo.getAt(root,e.getX-50,e.getY-yOffset)
+        over = lo.getAt(None,root,e.getX-50,e.getY-yOffset)
         repaint()
       }});
       
+      addMouseListener(new java.awt.event.MouseAdapter(){
+      override def mouseClicked(e:java.awt.event.MouseEvent){
+        lo.getAt(None,root,e.getX-50,e.getY-yOffset).foreach(sel => 
+          if (selected.contains(sel)) selected-=sel else selected+=sel)
+        repaint()
+      }                
+      })	
+      
       override def paint(g:Graphics) {
         val g2d = g.asInstanceOf[Graphics2D]
-        selected.foreach(exp => g2d.drawString(exp.toString,0,50))
+        over.foreach(exp => g2d.drawString(exp.exp.toString,0,50))
         g2d.setFont(font2)
-        lo.draw(g2d,root,50,yOffset)(selected)
+        lo.draw(g2d,ExpZipper(None,root),50,yOffset)(over,selected)
       }
     }
     canvas.setSize(panel.getSize)
