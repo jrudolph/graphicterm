@@ -70,8 +70,25 @@ object Collect extends Trans{
   }
 }
 
-case class ExpZipper(parent:Option[ExpZipper],exp:Exp){}
-
+case class ExpZipper(exp:Exp){
+  def left = exp match {case Apply(left,_,_)=>LeftZipper(this,left)}
+  def right = exp match {case Apply(_,_,right)=>RightZipper(this,right)}
+  def replace(e:Exp) = e
+  def tryTrans(t:Trans):Exp = replace(exp.tryTrans(t))
+}
+abstract case class ParentalZipper(parent:ExpZipper,override val exp:Exp)extends ExpZipper(exp){
+  override def replace(e:Exp):Exp = parent match {
+      case ExpZipper(exp:Apply) => 
+	    parent.replace(reconstructParent(e,exp))
+  }
+  def reconstructParent(e:Exp,ap:Apply):Apply
+}
+case class LeftZipper(override val parent:ExpZipper,override val exp:Exp) extends ParentalZipper(parent,exp){
+  def reconstructParent(e:Exp,ap:Apply) = Apply(e,ap.operator,ap.right)
+}
+case class RightZipper(override val parent:ExpZipper,override val exp:Exp) extends ParentalZipper(parent,exp){
+  def reconstructParent(e:Exp,ap:Apply) = Apply(ap.left,ap.operator,e)
+}
 
 import java.awt.font.FontRenderContext
 import java.awt.Font
@@ -113,19 +130,20 @@ class Layouter(f:Font,ctx:FontRenderContext){
     g2d.drawString(s,x.toFloat,(y+lo.getAscent/2).toFloat)
   }
   
-  def getAt(parent:Option[ExpZipper],root:Exp,x:Double,y:Double):Option[ExpZipper] = {
+  def getAt(cur:ExpZipper,x:Double,y:Double):Option[ExpZipper] = {
+    val root = cur.exp
     val h = height(root)
     if (x<0||x>width(root)||y< -h/2||y>h/2)
       None
     else
-      root match{
-      case a@Apply(e1,op,e2) => {
+      cur match{
+      case pos@ExpZipper(a@Apply(e1,op,e2)) => {
         val ol = offsetLeft(a)
         val or = offsetRight(a)
         
-        getAt(Some(ExpZipper(parent,root)),e1,x-ol._1,y-ol._2).orElse(getAt(Some(ExpZipper(parent,root)),e2,x-or._1,y-or._2)).orElse(Some(ExpZipper(parent,root)))
+        getAt(pos.left,x-ol._1,y-ol._2).orElse(getAt(pos.right,x-or._1,y-or._2)).orElse(Some(cur))
       }
-      case _ => Some(ExpZipper(parent,root))
+      case _ => Some(cur)
       }
   }
   
@@ -143,24 +161,23 @@ class Layouter(f:Font,ctx:FontRenderContext){
       g2d.fillRect(x.toInt,(y-h/2).toInt,w.toInt,h.toInt)
     }
     g2d.setColor(oldColor)
-    def next(e:Exp) = ExpZipper(Some(cur),e)
-    cur.exp match{
-  case a@Apply(e1,/,e2) => {
+    cur match{
+  case pos@ExpZipper(a@Apply(e1,/,e2)) => {
     val ol = offsetLeft(a)
     val or = offsetRight(a)
 
-    draw(g2d,next(e1),x+ol._1,y+ol._2)
-    draw(g2d,next(e2),x+or._1,y+or._2)
+    draw(g2d,pos.left,x+ol._1,y+ol._2)
+    draw(g2d,pos.right,x+or._1,y+or._2)
     
     g2d.drawLine(x.toInt,y.toInt,(x+width(cur.exp)).toInt,y.toInt)
   }
-  case a:Apply => {
+  case pos@ExpZipper(a:Apply) => {
     val ol = offsetLeft(a)
     val or = offsetRight(a)
     drawString(g2d,"(",x,y)
-    draw(g2d,next(a.left),x+ol._1,y+ol._2)
+    draw(g2d,pos.left,x+ol._1,y+ol._2)
     drawString(g2d,a.operator.toString,x+ol._1+width(a.left)+space,y)
-    draw(g2d,next(a.right),x+or._1,y+or._2)
+    draw(g2d,pos.right,x+or._1,y+or._2)
     drawString(g2d,")",x+or._1+space+width(a.right),y)
   }
   case _ => {
@@ -216,13 +233,13 @@ object Test{
       
       addMouseMotionListener(new java.awt.event.MouseMotionAdapter(){
       override def mouseMoved(e:java.awt.event.MouseEvent){
-        over = lo.getAt(None,root,e.getX-50,e.getY-yOffset)
+        over = lo.getAt(ExpZipper(root),e.getX-50,e.getY-yOffset)
         repaint()
       }});
       
       addMouseListener(new java.awt.event.MouseAdapter(){
       override def mouseClicked(e:java.awt.event.MouseEvent){
-        lo.getAt(None,root,e.getX-50,e.getY-yOffset).foreach(sel => 
+        lo.getAt(ExpZipper(root),e.getX-50,e.getY-yOffset).foreach(sel => 
           if (selected.contains(sel)) selected-=sel else selected+=sel)
         repaint()
       }                
@@ -232,7 +249,7 @@ object Test{
         val g2d = g.asInstanceOf[Graphics2D]
         over.foreach(exp => g2d.drawString(exp.exp.toString,0,50))
         g2d.setFont(font2)
-        lo.draw(g2d,ExpZipper(None,root),50,yOffset)(over,selected)
+        lo.draw(g2d,ExpZipper(root),50,yOffset)(over,selected)
       }
     }
     canvas.setSize(panel.getSize)
